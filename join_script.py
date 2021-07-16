@@ -23,8 +23,14 @@ Solids = list(itertools.chain(*Geom))
 tx = Transaction(doc, 'join walls')
 tx.Start()
 for i in range (len(walls)):
- for j in range (len(walls)):
+ for j in range (i,len(walls)):
+  surface1 = Solids[i].Faces[0].GetSurface()
+  surface2 = Solids[i].Faces[1].GetSurface()
+  surface3 = Solids[j].Faces[0].GetSurface()
+  surface4 = Solids[j].Faces[1].GetSurface()
   if not (JoinGeometryUtils.AreElementsJoined(doc, walls[i], walls[j])) and (BooleanOperationsUtils.ExecuteBooleanOperation(Solids[i], Solids[j], BooleanOperationsType.Intersect).Volume)*0.0283168 > 0.0 and i!=j:
     JoinGeometryUtils.JoinGeometry(doc, walls[i], walls[j])
+  elif surface1.Project(surface4.Origin)[1] < 0.00001 or surface2.Project(surface3.Origin)[1] <0.00001:
+     JoinGeometryUtils.JoinGeometry(doc, walls[i], walls[j])
     
 tx.Commit()
