@@ -1,0 +1,54 @@
+#floors and floors
+
+import clr
+clr.AddReference('RevitAPI')
+from Autodesk.Revit.DB import *
+from System.Collections.Generic import *
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+import itertools
+doc = __revit__.ActiveUIDocument.Document
+def overlap1D(a1, a2, b1, b2):
+  if a2>=b1 and b2>=a1:
+    return True
+  return False
+def bbIntersect(bbA, bbB):
+
+  return overlap1D(bbA.Min.X,bbA.Max.X,bbB.Min.X,bbB.Max.X) and overlap1D(bbA.Min.Y,bbA.Max.Y,bbB.Min.Y,bbB.Max.Y) and overlap1D(bbA.Min.Z,bbA.Max.Z,bbB.Min.Z,bbB.Max.Z)
+walls2= FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Floors).WhereElementIsNotElementType().ToElements()
+
+opt = Options()
+
+Geom=[i.get_Geometry(opt) for i in walls2]
+Solids2 = list(itertools.chain(*Geom))
+walls = []
+Solids = []
+k =  0
+for i in range(len(walls2)):
+ if Solids2[i].GetType().ToString() == "Autodesk.Revit.DB.Solid":
+  Solids.append(Solids2[i])
+  walls.append(walls2[i])
+tx = Transaction(doc, 'join walls')
+tx.Start()
+for i in range (len(walls)):
+ if Solids[i].Faces.Size == 0:
+   continue 
+ surface1 = Solids[i].Faces[0].GetSurface()
+ surface2 = Solids[i].Faces[1].GetSurface()
+ for j in range (i+1,len(walls)):
+  if Solids[j].Faces.Size == 0:
+   continue
+  surface3 = Solids[j].Faces[0].GetSurface()
+  surface4 = Solids[j].Faces[1].GetSurface()
+  a = walls[i].get_BoundingBox(None)
+  b = walls[j].get_BoundingBox(None)
+  if not (JoinGeometryUtils.AreElementsJoined(doc, walls[i], walls[j])) and (BooleanOperationsUtils.ExecuteBooleanOperation(Solids[i], Solids[j], BooleanOperationsType.Intersect).Volume)*0.0283168 > 0.0:
+    k+=1
+    JoinGeometryUtils.JoinGeometry(doc, walls[i], walls[j])
+  elif bbIntersect(a,b)  and not (JoinGeometryUtils.AreElementsJoined(doc, walls[i], walls[j]))  :#(surface1.Project(surface4.Origin)[1] < 0.000001 or surface2.Project(surface3.Origin)[1] < 0.000001)
+     k+=1
+     JoinGeometryUtils.JoinGeometry(doc, walls[i], walls[j])
+    
+tx.Commit()
