@@ -1,0 +1,91 @@
+import clr
+clr.AddReference('RevitAPI')
+from Autodesk.Revit.DB import *
+from System.Collections.Generic import *
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+import itertools
+
+uidoc = __revit__.ActiveUIDocument
+doc = uidoc.Document
+opt = Options()
+
+def pickobject():
+    from Autodesk.Revit.UI.Selection import ObjectType
+    __window__.Hide()
+    picked = uidoc.Selection.PickObject(ObjectType.Element)
+    __window__.Show()
+    __window__.Topmost = True
+    return picked
+picked = pickobject()	
+doc2 = doc.GetElement(picked.ElementId).GetLinkDocument()
+
+walls= FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Walls).WhereElementIsNotElementType().ToElements()
+floors2 =  FilteredElementCollector(doc2).OfCategory(BuiltInCategory.OST_Floors).WhereElementIsNotElementType().ToElements()
+beams =  FilteredElementCollector(doc2).OfCategory(BuiltInCategory.OST_StructuralFraming).WhereElementIsNotElementType().ToElements()
+
+Geom=[i.get_Geometry(opt) for i in walls]
+Solids1 = list(itertools.chain(*Geom))
+
+Geom=[i.get_Geometry(opt) for i in beams]
+Solids3 = list(itertools.chain(*Geom))
+Solids2 = []
+
+Geom=[i.get_Geometry(opt) for i in floors2]
+Solids4 = list(itertools.chain(*Geom))
+floors = []
+
+l = 0
+while l<len(Solids3): 
+ if  Solids3[l].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance" and (l == (len(Solids3) - 1) or Solids3[l+1].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance"):
+  ins = Solids3[l].GetInstanceGeometry()
+  enu = ins.GetEnumerator()
+  enu.MoveNext()
+  if enu.Current.Faces.Size == 0:
+   enu.MoveNext()
+  Solids2.append(enu.Current)
+  l+=1
+ else:
+  Solids2.append(Solids3[l+1])
+  l+=3
+
+for i in range(len(Solids4)):
+ if Solids4[i].GetType().ToString() == "Autodesk.Revit.DB.Solid":
+  Solids2.append(Solids4[i])
+  floors.append(floors2[i])
+
+align = [0.00001,0.00005,0.0001,0.0005]
+trans = doc.GetElement(picked.ElementId).GetTotalTransform()
+tx = Transaction(doc, 'join walls and floors')
+tx.Start()
+for j in range(len(walls)):
+ f = []
+ for i in range(len(Solids2)):
+  s = SolidUtils.CreateTransformed(Solids2[i],trans)
+  h1 = abs(Solids1[j].ComputeCentroid()[2] - Solids2[i].ComputeCentroid()[2])
+  h2 = Solids1[j].GetBoundingBox().Max[2] + Solids2[i].GetBoundingBox().Max[2]
+  #if (BooleanOperationsUtils.ExecuteBooleanOperation(Solids1[j], s, BooleanOperationsType.Intersect).Volume)*0.0283168 > 0.0 or round#(h1,3)==round(h2,3):
+    #print(j,i)
+    #f.append((Solids2[i].ComputeCentroid()[2],i))
+ for k in align:
+   t1 = Transform.CreateRotation(XYZ(0,0,1),k)
+   t2 = t1.Multiply(trans)
+   s = SolidUtils.CreateTransformed(Solids2[i],t2)
+   try:
+    flag = (BooleanOperationsUtils.ExecuteBooleanOperation(Solids1[j], s, BooleanOperationsType.Intersect).Volume)*0.0283168
+    if flag > 0.0  :
+     f.append((Solids2[i].ComputeCentroid()[2],i))
+   except:
+    continue
+ if round(h1,3) == round(h2,3):
+  f.append((Solids2[i].ComputeCentroid()[2],i)) 
+ f.sort()
+ if len(f)>=2:
+  currHeight = walls[j].GetParameters("Unconnected Height")[0].AsDouble()
+  height = (Solids1[j].ComputeCentroid()[2] + Solids1[j].GetBoundingBox().Max[2]) - ((Solids2[f[1][1]].ComputeCentroid()[2] - Solids2[f[1][1]].GetBoundingBox().Max[2]))
+  inv = ElementId.InvalidElementId
+  walls[j].GetParameters("Top Constraint")[0].Set(inv)
+  walls[j].GetParameters("Unconnected Height")[0].Set(currHeight - height) 
+tx.Commit() 
