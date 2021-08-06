@@ -1,0 +1,160 @@
+"""Alignment of walls with floors and beams of different model"""
+
+__title__ = 'Alignment'
+
+
+
+
+
+import clr
+clr.AddReference('RevitAPI')
+from Autodesk.Revit.DB import *
+from System.Collections.Generic import *
+clr.AddReference("RevitServices")
+import RevitServices
+from RevitServices.Persistence import DocumentManager
+from RevitServices.Transactions import TransactionManager
+import itertools
+
+uidoc = __revit__.ActiveUIDocument
+doc = uidoc.Document
+opt = Options()
+
+def pickobject():
+    from Autodesk.Revit.UI.Selection import ObjectType
+    #__window__.Hide()
+    picked = uidoc.Selection.PickObject(ObjectType.Element)
+    #__window__.Show()
+    #__window__.Topmost = True
+    return picked
+picked = pickobject()	
+doc2 = doc.GetElement(picked.ElementId).GetLinkDocument()
+
+file = open(r'C:\Users\Wahba\Desktop\Test Wall_detached.html',"r")
+x = file.read()
+
+k = x.IndexOf("id")
+wallIds = []
+while x.IndexOf("id",k+1) != -1 :
+ ind = k+3
+ z = ""
+ 
+ while x[ind] != " ":
+  z+=x[ind]
+  ind+=1 
+ id = int(z)
+ if len(wallIds) != 0:
+  if wallIds[-1] != id:
+   wallIds.append(id)
+ else:
+  wallIds.append(id)
+ k = x.IndexOf("id",k+1)
+ k = x.IndexOf("id",k+1)
+ if k == -1:
+  break
+
+walls = []
+for i in wallIds:
+ id = ElementId(i)
+ walls.append(doc.GetElement(id))
+ 
+floors2 =  FilteredElementCollector(doc2).OfCategory(BuiltInCategory.OST_Floors).WhereElementIsNotElementType().ToElements()
+beams =  FilteredElementCollector(doc2).OfCategory(BuiltInCategory.OST_StructuralFraming).WhereElementIsNotElementType().ToElements()
+
+Geom=[i.get_Geometry(opt) for i in walls]
+Solids1 = list(itertools.chain(*Geom))
+
+Geom=[i.get_Geometry(opt) for i in beams]
+Solids3 = list(itertools.chain(*Geom))
+Solids2 = []
+
+Geom=[i.get_Geometry(opt) for i in floors2]
+Solids4 = list(itertools.chain(*Geom))
+floors = []
+
+l = 0
+while l<len(Solids3): 
+ if  Solids3[l].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance" and (l == (len(Solids3) - 1) or Solids3[l+1].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance"):
+  ins = Solids3[l].GetInstanceGeometry()
+  enu = ins.GetEnumerator()
+  enu.MoveNext()
+  if enu.Current.Faces.Size == 0:
+   enu.MoveNext()
+  Solids2.append(enu.Current)
+  l+=1
+ else:
+  if Solids3[l+1].Faces.Size != 0:
+   Solids2.append(Solids3[l+1])
+  elif Solids3[l+2].Faces.Size !=0:
+   Solids2.append(Solids3[l+2])
+  l+=3
+
+for i in range(len(Solids4)):
+ if Solids4[i].GetType().ToString() == "Autodesk.Revit.DB.Solid":
+  Solids2.append(Solids4[i])
+  floors.append(floors2[i])
+
+align = [0.00001,0.00005,0.0001,0.0005]
+trans = doc.GetElement(picked.ElementId).GetTotalTransform()
+tx = Transaction(doc, 'join walls and floors')
+tx.Start()
+for j in range(len(walls)):
+ if walls[j].WallType.FamilyName == "Curtain Wall":
+  continue
+ try:
+  x = Solids1[j].ComputeCentroid()
+ except:
+  continue
+ f = []
+ h2 = walls[j].GetParameters("Unconnected Height")[0].AsDouble()
+ for i in range(len(Solids2)):
+  k = 0
+  b1 = 0
+  b2 = 1
+  if i < len(beams):
+   for x in range(0,6):
+    if Solids2[i].Faces[x].FaceNormal[2] == -1.0:
+     b1 = x
+    elif Solids2[i].Faces[x].FaceNormal[2] == 1.0:
+     b2 = x
+  for k in range(2,6):
+   if Solids1[j].Faces[k].FaceNormal[2] == 1.0:
+    break 
+  h1 = abs(Solids1[j].Faces[k].Origin[2] - Solids2[i].Faces[1].Origin[2])
+  #if (BooleanOperationsUtils.ExecuteBooleanOperation(Solids1[j], s, BooleanOperationsType.Intersect).Volume)*0.0283168 > 0.0 or round#(h1,3)==round(h2,3):
+    #print(j,i)
+    #f.append((Solids2[i].ComputeCentroid()[2],i))
+  for value in align:
+   t1 = Transform.CreateRotation(XYZ(0,0,1),value)
+   t2 = t1.Multiply(trans)
+   s = SolidUtils.CreateTransformed(Solids2[i],t2)
+   try:
+    flag = (BooleanOperationsUtils.ExecuteBooleanOperation(Solids1[j], s, BooleanOperationsType.Intersect).Volume)*0.0283168
+    if flag > 0.00001 :
+     #print(1)
+     f.append((Solids2[i].Faces[b1].Origin[2],i))
+     break
+   except:
+    continue   
+  if round(h1,3) == round(h2,3) and i>=len(beams) and Solids1[j].ComputeCentroid()[2]>Solids2[i].ComputeCentroid()[2]:
+   #print(h1,h2)
+   f.append((Solids2[i].Faces[b2].Origin[2],i)) 
+ f.sort()
+ if len(f)>=2:
+  #print(f)
+  #print(Solids1[j].ComputeCentroid()[2])
+  roof = -1
+  for n in range(len(f)):
+   if f[n][0]>Solids1[j].ComputeCentroid()[2]:
+    roof = n
+    break
+  if roof == -1:
+   continue
+  currHeight = walls[j].GetParameters("Unconnected Height")[0].AsDouble()
+  height = abs(f[roof][0] - f[roof-1][0])
+  #print(currHeight,height)
+  if currHeight - height< 4 :
+   inv = ElementId.InvalidElementId
+   walls[j].GetParameters("Top Constraint")[0].Set(inv)
+   walls[j].GetParameters("Unconnected Height")[0].Set(height) 
+tx.Commit() 
