@@ -1,0 +1,26 @@
+file = open ("C:\\Users\\Wahba\\Desktop\\Test Wall_detached.html","r")
+x = file.read()
+
+k = x.IndexOf("id")
+walls = []
+while x.IndexOf("id",k+1) != -1 :
+ ind = k+3
+ z = ""
+ print(k)
+ #k = x.IndexOf("id",k+1)
+ while x[ind] != " ":
+  z+=x[ind]
+  ind+=1
+ print(z) 
+ id = int(z)
+ print(ind)
+ if len(walls) != 0:
+  if walls[-1] != id:
+   walls.append(id)
+ else:
+  walls.append(id)
+ k = x.IndexOf("id",k+1)
+ k = x.IndexOf("id",k+1)
+ if k == -1:
+  break
+ print(3)
