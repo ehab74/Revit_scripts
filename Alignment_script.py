@@ -1,5 +1,9 @@
 """Alignment of walls with floors and beams of different model"""
 
+
+import clr
+clr.AddReference('RevitAPI')
+clr.AddReference("RevitServices")
 from Autodesk.Revit.UI.Selection import ObjectType
 from RevitServices.Transactions import TransactionManager
 from RevitServices.Persistence import DocumentManager
@@ -11,80 +15,106 @@ import RevitServices
 __title__ = 'Alignment'
 
 
-import clr
-clr.AddReference('RevitAPI')
-clr.AddReference("RevitServices")
-
 activeProject = __revit__.ActiveUIDocument
 doc = activeProject.Document
 opt = Options()
 homeDirectory = expanduser("~")
 
 
-def pickobject():
-    # __window__.Hide()
+def pickObject():
+    __window__.Hide()
     pickedObject = activeProject.Selection.PickObject(ObjectType.Element)
-    # __window__.Show()
-    #__window__.Topmost = True
+    __window__.Show()
+    __window__.Topmost = True
     return pickedObject
 
+def getLinkedDocument(pickedObject):
+  return doc.GetElement(pickedObject.ElementId).GetLinkDocument()
 
-pickedObject = pickobject()
-docLink = doc.GetElement(pickedObject.ElementId).GetLinkDocument()
-
-file = open(homeDirectory + r'\Desktop\walls.html', "r")
-data = file.read()
-
-index = data.IndexOf("id ")
-wallIds = []
-
-while index != -1:
+def getWallIDs(data):
+  index = data.IndexOf("id ")
+  wallIds = []
+  while index != -1:
     index += 3
-    stringID = ""
+    id = getID(data,index)
+    wallIds.append(id)
+    index = data.IndexOf("id ", index+1) # Floor ID, should be skipped
+    index = data.IndexOf("id ", index+1)
+  return list(set(wallIds))
 
-    while data[index] != " ":
+def getID(data,index):
+  stringID = ""
+  while data[index] != " ":
         stringID += data[index]
         index += 1
+  return int(stringID)
 
-    id = int(stringID)
-    wallIds.append(id)
-    index = data.IndexOf("id ", index+1)
-    index = data.IndexOf("id ", index+1)
-
-wallIds = list(set(wallIds))
-walls = []
-for i in wallIds:
+def getWalls(doc,wallIds):
+  walls = []
+  for i in wallIds:
     id = ElementId(i)
     walls.append(doc.GetElement(id))
+  return walls
 
-floors = FilteredElementCollector(docLink).OfCategory(
-    BuiltInCategory.OST_Floors).WhereElementIsNotElementType().ToElements()
-beams = FilteredElementCollector(docLink).OfCategory(
-    BuiltInCategory.OST_StructuralFraming).WhereElementIsNotElementType().ToElements()
+def getElements(objectType):
+  return FilteredElementCollector(docLink).OfCategory(objectType).WhereElementIsNotElementType().ToElements()
 
-Geom = [i.get_Geometry(opt) for i in walls]
-wallSolids = list(itertools.chain(*Geom))
+def getSolids(solidType):
+  Geom = [i.get_Geometry(opt) for i in solidType]
+  return list(itertools.chain(*Geom))
 
-Geom = [i.get_Geometry(opt) for i in beams]
-beamSolids = list(itertools.chain(*Geom))
+def getBeamSolid(solid):
+  instance = solid.GetInstanceGeometry()
+  enumerator = instance.GetEnumerator()
+  enumerator.MoveNext()
+  if enumerator.Current.Faces.Size == 0:
+    enumerator.MoveNext()
+  return enumerator.Current
+
+def getWallFace(wall):
+  for face in range(2, 6):
+    if round(wall.Faces[face].FaceNormal[2],1) == 1.0:
+        return face
+
+def getBeamFace(beam,z_coord):
+  for face in range(0, 6):
+    if beam.Faces[face].FaceNormal[2] == z_coord:
+        return face
+
+def calculateIntersectedVolume(wall,solid):
+  return (BooleanOperationsUtils.ExecuteBooleanOperation(wall, solid, BooleanOperationsType.Intersect).Volume)*0.0283168
+
+def setHeight(wall,height):
+  invalidId = ElementId.InvalidElementId
+  wall.GetParameters("Top Constraint")[0].Set(invalidId)
+  wall.GetParameters("Unconnected Height")[0].Set(height)
+
+pickedObject = pickObject()
+docLink = getLinkedDocument(pickedObject)
+
+#file = open(homeDirectory + r'\Desktop\walls.html', "r")
+#data = file.read()
+#wallIds = getWallIDs(data)
+
+walls = selection
+floors = getElements(BuiltInCategory.OST_Floors)
+beams = getElements(BuiltInCategory.OST_StructuralFraming)
+
+wallSolids = getSolids(walls)
+beamSolids = getSolids(beams)
+floorSolids = getSolids(floors)
+
+# Filter solids of beams and floors
 beamFloorSolids = []
-
-Geom = [i.get_Geometry(opt) for i in floors]
-floorSolids = list(itertools.chain(*Geom))
-
 itr = 0
 while itr < len(beamSolids):
-    if beamSolids[l].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance" and (itr == (len(beamSolids) - 1) or beamSolids[l+1].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance"):
-        instance = beamSolids[l].GetInstanceGeometry()
-        enumerator = instance.GetEnumerator()
-        enumerator.MoveNext()
-        if enumerator.Current.Faces.Size == 0:
-            enumerator.MoveNext()
-        beamFloorSolids.append(enumerator.Current)
+    if beamSolids[itr].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance" and (itr == (len(beamSolids) - 1) or beamSolids[itr+1].GetType().ToString() == "Autodesk.Revit.DB.GeometryInstance"):
+        solid = getBeamSolid(beamSolids[itr])
+        beamFloorSolids.append(solid)
         itr += 1
     else:
         if beamSolids[itr + 1].Faces.Size != 0:
-            beamFloorSolids.append(beamSolids[l+1])
+            beamFloorSolids.append(beamSolids[itr+1])
         elif beamSolids[itr + 2].Faces.Size != 0:
             beamFloorSolids.append(beamSolids[itr + 2])
         itr += 3
@@ -95,7 +125,7 @@ for itr in range(len(floorSolids)):
         beamFloorSolids.append(floorSolids[itr])
 
 align = [0.00001, 0.00005, 0.0001, 0.0005]
-trans = doc.GetElement(picked.ElementId).GetTotalTransform()
+trans = doc.GetElement(pickedObject.ElementId).GetTotalTransform()
 tx = Transaction(doc, 'join walls and floors')
 tx.Start()
 for j in range(len(walls)):
@@ -106,54 +136,50 @@ for j in range(len(walls)):
     except:
         continue
 
-    IntersectingElements = []
+    intersectingElements = []
     wallHeight = walls[j].GetParameters("Unconnected Height")[0].AsDouble()
+    wallUpperFace = getWallFace(wallSolids[j])
     for i in range(len(beamFloorSolids)):
-        wallUpperFace = 0
-        beamUpperFace = 0
-        beamLowerFace = 1
-        if i < len(beams):
-            for face in range(0, 6):
-                if beamFloorSolids[i].Faces[face].FaceNormal[2] == -1.0:
-                    beamUpperFace = face
-                elif beamFloorSolids[i].Faces[face].FaceNormal[2] == 1.0:
-                    beamLowerFace = face
-        for wallUpperFace in range(2, 6):
-            if wallSolids[j].Faces[wallUpperFace].FaceNormal[2] == 1.0:
-                break
-        wallFloorDistance = abs(
-            wallSolids[j].Faces[wallUpperFace].Origin[2] - beamFloorSolids[i].Faces[1].Origin[2])
+        #print(wallUpperFace)
+        intersectLowerFace = 0 if i>=len(beams) else getBeamFace(beamFloorSolids[i],-1.0)
+        #intersectUpperFace = 1 if i>=len(beams) else getBeamFace(beamFloorSolids[i],1.0)
+      
+        #wallIntersectDistance = abs(
+        #    wallSolids[j].Faces[wallUpperFace].Origin[2] - beamFloorSolids[i].Faces[intersectUpperFace].Origin[2])
+
+        # Check intersection
         for value in align:
             AlignmentTransform = Transform.CreateRotation(XYZ(0, 0, 1), value)
-            t2 = AlignmentTransform.Multiply(trans)
+            alignTrans = AlignmentTransform.Multiply(trans)
             transformedSolid = SolidUtils.CreateTransformed(
-                beamFloorSolids[i], t2)
+                beamFloorSolids[i], alignTrans)
             try:
-                flag = (BooleanOperationsUtils.ExecuteBooleanOperation(
-                    wallSolids[j], transformedSolid, BooleanOperationsType.Intersect).Volume)*0.0283168
-                if flag > value*100:
-                    IntersectingElements.append(
-                        (beamFloorSolids[i].Faces[beamUpperFace].Origin[2]))
+                intersectedVolume = calculateIntersectedVolume(wallSolids[j],transformedSolid)
+                if intersectedVolume > value*100:
+                    intersectingElements.append(
+                        (beamFloorSolids[i].Faces[intersectLowerFace].Origin[2]))
                     break
             except:
                 continue
-        if round(wallFloorDistance, 3) == round(wallHeight, 3) and i >= len(beams) and wallSolids[j].ComputeCentroid()[2] > beamFloorSolids[i].ComputeCentroid()[2]:
-            IntersectingElements.append(
-                (beamFloorSolids[i].Faces[beamLowerFace].Origin[2]))
-    IntersectingElements.sort()
-    if len(IntersectingElements) >= 2:
-        roofIndex = -1
-        for itr in range(len(IntersectingElements)):
-            if IntersectingElements[itr] > wallSolids[j].ComputeCentroid()[2]:
-                roofIndex = itr
-                break
-        if roofIndex == -1:
-            continue
-        currHeight = walls[j].GetParameters("Unconnected Height")[0].AsDouble()
-        height = abs(
-            IntersectingElements[roofIndex] - IntersectingElements[roofIndex-1])
-        if currHeight - height < 10:
-            invalidId = ElementId.InvalidElementId
-            walls[j].GetParameters("Top Constraint")[0].Set(invavlidId)
-            walls[j].GetParameters("Unconnected Height")[0].Set(height)
+        
+        # Check position
+        #if round(wallIntersectDistance, 3) == round(wallHeight, 3) and i >= len(beams) and wallSolids[j].ComputeCentroid()[2] > #beamFloorSolids[i].ComputeCentroid()[2]:
+#            intersectingElements.append(
+#                (beamFloorSolids[i].Faces[intersectUpperFace].Origin[2]))
+   
+    intersectingElements.sort()
+
+    # Check first upper solid
+    #if len(intersectingElements) >= 2:
+    roofIndex = -1
+    for itr in range(len(intersectingElements)):
+        if intersectingElements[itr] > wallSolids[j].ComputeCentroid()[2]:
+             roofIndex = itr
+             break
+    if roofIndex == -1:
+        continue
+            
+    newHeight = abs( wallHeight - abs(wallSolids[j].Faces[wallUpperFace].Origin[2] - intersectingElements[roofIndex]))
+    if wallHeight - newHeight < 10:
+            setHeight(walls[j],newHeight)
 tx.Commit()
